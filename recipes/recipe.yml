@@ -30,7 +30,7 @@ modules:
   - type: rpm-ostree
     repos:
       - https://pkg.surfacelinux.com/fedora/linux-surface.repo
-      - https://pkgs.tailscale.com/stable/fedora/%OS_VERSION%/tailscale.repo
+      - https://pkgs.tailscale.com/stable/fedora/tailscale.repo
     install:
       - kernel-surface          # linux-surface patched kernel
       - iptsd                   # Intel Precise Touch & Stylus (touchscreen + pen)
