@@ -12,57 +12,45 @@ image-version: 44
 
 modules:
   # Sets up cosign signing policies so rpm-ostree/bootc can verify this image
-  # when you rebase to it via the signed image path. Always place this first.
+  # when you rebase to it via the signed image path.
   - type: signing
 
-  # Add the linux-surface and Tailscale repos, swap the stock Fedora kernel
-  # for kernel-surface, install Surface-specific and Tailscale packages, and
-  # remove Firefox and the stock libwacom.
-  #
-  # When both install: and remove: are present, the rpm-ostree module issues
-  # a single hybrid "rpm-ostree override remove ... --install ..." command.
-  # Running this at OCI build time avoids the posttrans bwrap/dracut
-  # cross-device-link failure that breaks the same swap done at runtime.
-  #
-  # NOTE: if the build fails with "Package 'firefox' is not installed",
-  # remove firefox and firefox-langpacks from the remove: list below.
-  # ublue-os/kinoite-main may already exclude them in a future base image.
+  # Create a Fedora 43-pinned linux-surface repo definition.
+  # This works around linux-surface not yet publishing Fedora 44 metadata.
   - type: script
-  snippets:
-    - |
-      cat > /etc/yum.repos.d/linux-surface.repo << 'EOF'
-      [linux-surface]
-      name=Linux Surface Fedora 43
-      baseurl=https://pkg.surfacelinux.com/fedora/f43/
-      enabled=1
-      gpgcheck=1
-      repo_gpgcheck=0
-      gpgkey=https://raw.githubusercontent.com/linux-surface/linux-surface/master/pkg/keys/surface.asc
-      EOF
+    snippets:
+      - |
+        cat > /etc/yum.repos.d/linux-surface.repo << 'EOF'
+        [linux-surface]
+        name=Linux Surface Repo
+        baseurl=https://pkg.surfacelinux.com/fedora/f43/
+        enabled=1
+        gpgcheck=1
+        repo_gpgcheck=0
+        gpgkey=https://raw.githubusercontent.com/linux-surface/linux-surface/master/pkg/keys/surface.asc
+        EOF
+
+  # Install linux-surface and Tailscale packages.
   - type: rpm-ostree
     repos:
       - https://pkgs.tailscale.com/stable/fedora/tailscale.repo
     install:
-      - kernel-surface          # linux-surface patched kernel
-      - iptsd                   # Intel Precise Touch & Stylus (touchscreen + pen)
-      - surface-secureboot      # places the linux-surface MOK certificate on disk
-      - tailscale               # Tailscale VPN client and CLI
+      - kernel-surface
+      - iptsd
+      - surface-secureboot
+      - tailscale
     remove:
-      - kernel                  # stock Fedora kernel meta-package
+      - kernel
       - kernel-core
       - kernel-modules
       - kernel-modules-extra
-      - firefox                 # remove stock RPM; install a browser Flatpak instead
+      - firefox
       - firefox-langpacks
 
   # Ensure pinctrl_tigerlake loads before surface_aggregator.
-  # Without this ordering, keyboard and touchpad can stop working on
-  # kernel >= 6.12.4 on Surface Pro 7 and several other Surface models.
-  # Also ensure Surface SAM and HID drivers are pulled into the initramfs early.
   - type: script
     snippets:
       - |
-        # Module load ordering fix
         cat > /etc/modules-load.d/surface-modules.conf << 'EOF'
         pinctrl_tigerlake
         surface_aggregator
@@ -73,27 +61,20 @@ modules:
         surface_kbd
         EOF
 
-        # Pull Surface drivers into the initramfs
         cat > /etc/dracut.conf.d/surface.conf << 'EOF'
         add_drivers+=" pinctrl_tigerlake surface_aggregator surface_aggregator_registry surface_aggregator_hub surface_hid_core surface_hid surface_kbd "
         EOF
 
-  # Rebuild the initramfs at image build time so the dracut.conf.d and
-  # modules-load.d changes above are baked in. Must come after all kernel
-  # and module-related changes. Requires Fedora 41+.
+  # Rebuild initramfs after kernel changes.
   - type: initramfs
 
-  # Enable the Tailscale daemon at boot for all users.
-  # You still need to run "sudo tailscale up" on first boot to authenticate.
+  # Enable Tailscale.
   - type: systemd
     system:
       enabled:
         - tailscaled.service
 
-  # Kernel command-line arguments for the Surface Pro 7.
-  # mem_sleep_default=s2idle: use S0ix / modern standby instead of S3,
-  # which matches how Surface hardware is designed to suspend and gives
-  # better battery life and wake reliability on recent kernels.
+  # Surface Pro 7 suspend settings.
   - type: kargs
     kargs:
       - mem_sleep_default=s2idle
