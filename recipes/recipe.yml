@@ -34,8 +34,6 @@ modules:
     install:
       - kernel-surface          # linux-surface patched kernel
       - iptsd                   # Intel Precise Touch & Stylus (touchscreen + pen)
-      - libwacom-surface        # Surface pen/stylus support for libwacom
-      - libwacom-surface-data   # associated data files
       - surface-secureboot      # places the linux-surface MOK certificate on disk
       - tailscale               # Tailscale VPN client and CLI
     remove:
@@ -43,8 +41,6 @@ modules:
       - kernel-core
       - kernel-modules
       - kernel-modules-extra
-      - libwacom                # replaced by libwacom-surface
-      - libwacom-data
       - firefox                 # remove stock RPM; install a browser Flatpak instead
       - firefox-langpacks
 
