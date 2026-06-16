@@ -1,45 +1,92 @@
 ---
 # yaml-language-server: $schema=https://schema.blue-build.org/recipe-v1.json
-# image will be published to ghcr.io/<user>/<name>
-name: surface-kionite
-# description will be included in the image's metadata
-description: This is my personal OS image.
 
-# the base image to build on top of (FROM) and the version tag to use
-base-image: ghcr.io/ublue-os/silverblue-main
-image-version: 42 # latest is also supported if you want new updates ASAP
+name: kinoite-surface
+description: >-
+  Fedora Kinoite 44 with the linux-surface kernel for Microsoft Surface Pro 7.
+  Includes touchscreen, stylus, Secure Boot support, and Tailscale.
+  Firefox is removed in favour of whatever browser you prefer as a Flatpak.
 
-# module configuration, executed in order
-# you can include multiple instances of the same module
+base-image: ghcr.io/ublue-os/kinoite-main
+image-version: 44
+
 modules:
-  - type: files
-    files:
-      - source: system
-        destination: / # copies files/system/* (* means everything inside it) into your image's root folder /
+  # Sets up cosign signing policies so rpm-ostree/bootc can verify this image
+  # when you rebase to it via the signed image path. Always place this first.
+  - type: signing
 
-  - type: dnf
+  # Add the linux-surface and Tailscale repos, swap the stock Fedora kernel
+  # for kernel-surface, install Surface-specific and Tailscale packages, and
+  # remove Firefox and the stock libwacom.
+  #
+  # When both install: and remove: are present, the rpm-ostree module issues
+  # a single hybrid "rpm-ostree override remove ... --install ..." command.
+  # Running this at OCI build time avoids the posttrans bwrap/dracut
+  # cross-device-link failure that breaks the same swap done at runtime.
+  #
+  # NOTE: if the build fails with "Package 'firefox' is not installed",
+  # remove firefox and firefox-langpacks from the remove: list below.
+  # ublue-os/kinoite-main may already exclude them in a future base image.
+  - type: rpm-ostree
     repos:
-      copr:
-        - atim/starship
+      - https://pkg.surfacelinux.com/fedora/linux-surface.repo
+      - https://pkgs.tailscale.com/stable/fedora/%OS_VERSION%/tailscale.repo
     install:
-      packages:
-        - micro
-        - starship
+      - kernel-surface          # linux-surface patched kernel
+      - iptsd                   # Intel Precise Touch & Stylus (touchscreen + pen)
+      - libwacom-surface        # Surface pen/stylus support for libwacom
+      - libwacom-surface-data   # associated data files
+      - surface-secureboot      # places the linux-surface MOK certificate on disk
+      - tailscale               # Tailscale VPN client and CLI
     remove:
-      packages:
-        # example: removing firefox (in favor of the flatpak)
-        # "firefox" is the main package, "firefox-langpacks" is a dependency
-        - firefox
-        - firefox-langpacks # also remove firefox dependency (not required for all packages, this is a special case)
+      - kernel                  # stock Fedora kernel meta-package
+      - kernel-core
+      - kernel-modules
+      - kernel-modules-extra
+      - libwacom                # replaced by libwacom-surface
+      - libwacom-data
+      - firefox                 # remove stock RPM; install a browser Flatpak instead
+      - firefox-langpacks
 
-  - type: default-flatpaks
-    configurations:
-      - notify: true # Send notification after install/uninstall is finished (true/false)
-        scope: system
-        # If no repo information is specified, Flathub will be used by default
-        install: # system flatpaks we want all users to have and not remove
-          - org.mozilla.firefox
-          - org.gnome.Loupe
-      - scope: user # Also add Flathub user repo, but no user packages
+  # Ensure pinctrl_tigerlake loads before surface_aggregator.
+  # Without this ordering, keyboard and touchpad can stop working on
+  # kernel >= 6.12.4 on Surface Pro 7 and several other Surface models.
+  # Also ensure Surface SAM and HID drivers are pulled into the initramfs early.
+  - type: script
+    snippets:
+      - |
+        # Module load ordering fix
+        cat > /etc/modules-load.d/surface-modules.conf << 'EOF'
+        pinctrl_tigerlake
+        surface_aggregator
+        surface_aggregator_registry
+        surface_aggregator_hub
+        surface_hid_core
+        surface_hid
+        surface_kbd
+        EOF
 
-  - type: signing # this sets up the proper policy & signing files for signed images to work fully
+        # Pull Surface drivers into the initramfs
+        cat > /etc/dracut.conf.d/surface.conf << 'EOF'
+        add_drivers+=" pinctrl_tigerlake surface_aggregator surface_aggregator_registry surface_aggregator_hub surface_hid_core surface_hid surface_kbd "
+        EOF
+
+  # Rebuild the initramfs at image build time so the dracut.conf.d and
+  # modules-load.d changes above are baked in. Must come after all kernel
+  # and module-related changes. Requires Fedora 41+.
+  - type: initramfs
+
+  # Enable the Tailscale daemon at boot for all users.
+  # You still need to run "sudo tailscale up" on first boot to authenticate.
+  - type: systemd
+    system:
+      enabled:
+        - tailscaled.service
+
+  # Kernel command-line arguments for the Surface Pro 7.
+  # mem_sleep_default=s2idle: use S0ix / modern standby instead of S3,
+  # which matches how Surface hardware is designed to suspend and gives
+  # better battery life and wake reliability on recent kernels.
+  - type: kargs
+    kargs:
+      - mem_sleep_default=s2idle
